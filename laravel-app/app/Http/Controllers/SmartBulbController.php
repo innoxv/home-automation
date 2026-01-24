@@ -18,7 +18,7 @@ class SmartBulbController extends Controller
     public function bulbControl(Request $request)
     {
         $request->validate([
-            'bulb' => 'required|integer|in:1,2',
+            'bulb' => 'required|integer|in:1,2,3',  // Updated for 3 bulbs
             'action' => 'required|string|in:on,off,brightness',
             'value' => 'nullable|integer|min:0|max:100'
         ]);
