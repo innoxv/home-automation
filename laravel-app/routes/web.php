@@ -12,4 +12,5 @@ Route::prefix('api')->group(function () {
     Route::post('/group/control', [SmartBulbController::class, 'groupControl']);
     Route::get('/status', [SmartBulbController::class, 'getStatus']);
     Route::post('/command', [SmartBulbController::class, 'sendCommand']);
+    Route::post('/voice', [SmartBulbController::class, 'voiceCommand']);
 });

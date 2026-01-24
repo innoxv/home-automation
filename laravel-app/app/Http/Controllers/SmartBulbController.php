@@ -119,4 +119,33 @@ class SmartBulbController extends Controller
             ], 500);
         }
     }
+
+    // Voice command
+    public function voiceCommand(Request $request)
+    {
+        $request->validate([
+            'command' => 'required|string',
+            'bulb' => 'nullable|integer|in:1,2,3',
+            'action' => 'nullable|string',
+            'value' => 'nullable|integer|min:0|max:100',
+            'effect' => 'nullable|string|in:strobe,fade,pulse,alternate,rainbow'
+        ]);
+        
+        try {
+            $response = Http::post("{$this->apiUrl}/api/voice", [
+                'command' => $request->command,
+                'bulb' => $request->bulb,
+                'action' => $request->action,
+                'value' => $request->value,
+                'effect' => $request->effect
+            ]);
+            
+            return $response->json();
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
 }
