@@ -71,6 +71,13 @@ class GroupCommand(BaseModel):
             return int(v)
         except (ValueError, TypeError):
             return None
+        
+class VoiceCommand(BaseModel):
+    command: str
+    bulb: Optional[int] = None
+    action: Optional[str] = None
+    value: Optional[int] = None
+    effect: Optional[str] = None
 
 def get_available_ports():
     """Find all available serial ports"""
@@ -527,6 +534,74 @@ def get_status():
             "connected": False,
             "timestamp": time.time()
         }
+
+@app.post("/api/voice")
+def voice_command(command: VoiceCommand):
+    """Handle voice commands"""
+    try:
+        response = None
+        
+        if command.command == "turn_on":
+            if command.bulb:
+                cmd = f"B{command.bulb} ON"
+            else:
+                cmd = "ALL ON"
+            response = send_to_arduino(cmd)
+            
+        elif command.command == "turn_off":
+            if command.bulb:
+                cmd = f"B{command.bulb} OFF"
+            else:
+                cmd = "ALL OFF"
+            response = send_to_arduino(cmd)
+            
+        elif command.command == "set_brightness":
+            if command.value is not None:
+                pwm_value = int(command.value * 2.55)
+                if command.bulb:
+                    cmd = f"B{command.bulb} {pwm_value}"
+                    current_state[f"bulb{command.bulb}"]["brightness"] = command.value
+                    current_state[f"bulb{command.bulb}"]["state"] = "on" if command.value > 0 else "off"
+                else:
+                    # Set all bulbs
+                    for i in range(1, 4):
+                        cmd = f"B{i} {pwm_value}"
+                        send_to_arduino(cmd)
+                        current_state[f"bulb{i}"]["brightness"] = command.value
+                        current_state[f"bulb{i}"]["state"] = "on" if command.value > 0 else "off"
+                    response = f"All bulbs set to {command.value}%"
+                current_state["mode"] = "manual"
+                
+        elif command.command == "start_effect" and command.effect:
+            # Convert effect name to lowercase
+            effect_lower = command.effect.lower()
+            if effect_lower in ["strobe", "fade", "pulse", "alternate", "rainbow"]:
+                current_state["mode"] = effect_lower
+                response = f"{command.effect} effect started"
+            else:
+                raise HTTPException(status_code=400, detail="Invalid effect")
+                
+        elif command.command == "stop_effects":
+            response = send_to_arduino("ALL OFF")
+            current_state["mode"] = "manual"
+            for i in range(1, 4):
+                current_state[f"bulb{i}"]["state"] = "off"
+                current_state[f"bulb{i}"]["brightness"] = 0
+            response = "All effects stopped"
+        
+        else:
+            raise HTTPException(status_code=400, detail="Unknown voice command")
+        
+        return {
+            "success": True,
+            "command": command.command,
+            "response": response,
+            "state": current_state,
+            "connected": current_state["connected"]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ========== EFFECT FUNCTIONS (Updated for 3 bulbs) ==========
 

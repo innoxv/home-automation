@@ -1,0 +1,422 @@
+/* FOR LOCAL BOOTSTRAP & FONTAWESOME */
+/* Import Bootstrap */
+@import '~bootstrap/dist/css/bootstrap.min.css';
+
+/* Import Font Awesome */
+@import '~@fortawesome/fontawesome-free/css/all.min.css';
+
+/* CSS Variables */
+:root {
+    --bulb1-color: #ff6b6b;
+    --bulb2-color: #4ecdc4;
+    --bulb3-color: #45b7d1;
+    --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    --voice-active: #4CAF50;
+    --voice-inactive: #f44336;
+    --voice-listening: #FF9800;
+}
+
+/* Base Styles */
+body {
+    background: #f5f7fb;
+    min-height: 100vh;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+/* Glass Card */
+.glass-card {
+    background: white;
+    border-radius: 20px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.glass-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.12);
+}
+
+/* Bulb Styles */
+.bulb-container {
+    position: relative;
+    width: 120px;
+    height: 120px;
+    margin: 0 auto;
+}
+
+.bulb-icon {
+    font-size: 3.5rem;
+    color: #ddd;
+    transition: all 0.3s ease;
+    filter: drop-shadow(0 5px 15px rgba(0,0,0,0.1));
+}
+
+.bulb-on .bulb-icon {
+    color: currentColor;
+    filter: drop-shadow(0 0 25px currentColor);
+    animation: gentleGlow 2s infinite alternate;
+}
+
+@keyframes gentleGlow {
+    0% { opacity: 0.9; }
+    100% { opacity: 1; }
+}
+
+.bulb1-color { color: var(--bulb1-color); }
+.bulb2-color { color: var(--bulb2-color); }
+.bulb3-color { color: var(--bulb3-color); }
+
+/* Control Buttons */
+.control-btn {
+    width: 50px;
+    height: 50px;
+    border-radius: 12px;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.3rem;
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+
+.control-btn:hover {
+    transform: scale(1.1);
+}
+
+.control-btn:active {
+    transform: scale(0.95);
+}
+
+.btn-on { 
+    background: linear-gradient(135deg, #4CAF50, #2E7D32); 
+    color: white; 
+}
+
+.btn-off { 
+    background: linear-gradient(135deg, #f44336, #c62828); 
+    color: white; 
+}
+
+.btn-voice {
+    background: linear-gradient(135deg, #2196F3, #1976D2);
+    color: white;
+}
+
+/* Brightness Control */
+.brightness-control {
+    padding: 15px 0;
+}
+
+.brightness-slider {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 10px;
+    border-radius: 5px;
+    background: linear-gradient(to right, #000, #fff);
+    outline: none;
+    transition: background 0.3s;
+}
+
+.brightness-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: white;
+    border: 3px solid #667eea;
+    cursor: pointer;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.2);
+    transition: all 0.2s;
+}
+
+.brightness-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.1);
+    box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+}
+
+/* Effect Styles */
+.effect-icon {
+    font-size: 1.6rem;
+    margin-bottom: 5px;
+}
+
+.effect-btn {
+    padding: 12px 8px;
+    border-radius: 12px;
+    border: 2px solid #e0e0e0;
+    background: white;
+    color: #666;
+    transition: all 0.2s ease;
+    cursor: pointer;
+    font-size: 0.85rem;
+}
+
+.effect-btn:hover {
+    border-color: #667eea;
+    background: #f0f4ff;
+    color: #667eea;
+}
+
+.effect-btn.active {
+    border-color: #667eea;
+    background: var(--primary-gradient);
+    color: white;
+    box-shadow: 0 5px 20px rgba(102, 126, 234, 0.3);
+}
+
+/* Status Dot */
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 8px;
+}
+
+.connected { 
+    background: #4CAF50; 
+    animation: pulse 2s infinite; 
+}
+
+.disconnected { 
+    background: #f44336; 
+}
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+}
+
+/* Voice Control Panel */
+.voice-control-panel {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: white;
+    border-radius: 15px;
+    padding: 15px;
+    box-shadow: 0 5px 25px rgba(0, 0, 0, 0.1);
+    z-index: 1000;
+    min-width: 250px;
+    border: 1px solid #e0e0e0;
+}
+
+.voice-status {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.voice-status i {
+    font-size: 1.2rem;
+    margin-right: 10px;
+    color: #666;
+}
+
+.voice-status-text {
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.voice-feedback {
+    margin-left: auto;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--voice-inactive);
+}
+
+.voice-feedback.listening {
+    background: var(--voice-listening);
+    animation: pulse 1s infinite;
+}
+
+.voice-feedback.processing {
+    background: var(--voice-listening);
+    animation: pulse 0.5s infinite;
+}
+
+.voice-feedback.success {
+    background: var(--voice-active);
+}
+
+.voice-toggle-btn {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    border: none;
+    background: var(--primary-gradient);
+    color: white;
+    font-size: 1.5rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto;
+}
+
+.voice-toggle-btn:hover {
+    transform: scale(1.1);
+    box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+}
+
+.voice-toggle-btn.listening {
+    background: var(--voice-listening);
+    animation: pulse 1s infinite;
+}
+
+.voice-commands-list {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid #eee;
+    display: none;
+}
+
+.voice-commands-list.show {
+    display: block;
+}
+
+.voice-commands-list h6 {
+    color: #333;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+}
+
+.voice-commands-list h6 i {
+    margin-right: 8px;
+}
+
+.voice-commands-list ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    font-size: 0.8rem;
+}
+
+.voice-commands-list li {
+    padding: 3px 0;
+    color: #666;
+    border-bottom: 1px dashed #eee;
+}
+
+.voice-commands-list li:last-child {
+    border-bottom: none;
+}
+
+/* Voice Toast */
+.voice-toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 5px 25px rgba(0, 0, 0, 0.15);
+    z-index: 9999;
+    min-width: 300px;
+    transform: translateY(100px);
+    opacity: 0;
+    transition: all 0.3s ease;
+}
+
+.voice-toast.show {
+    transform: translateY(0);
+    opacity: 1;
+}
+
+.voice-toast-content {
+    padding: 0;
+}
+
+.voice-toast-header {
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: white;
+    padding: 12px 15px;
+    border-radius: 10px 10px 0 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.voice-toast-header i {
+    margin-right: 8px;
+}
+
+.voice-toast-close {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+}
+
+.voice-toast-body {
+    padding: 15px;
+}
+
+#voice-command-text {
+    font-weight: 500;
+    margin-bottom: 5px;
+    color: #333;
+}
+
+.voice-action {
+    font-size: 0.9rem;
+    color: #666;
+    font-style: italic;
+}
+
+/* Effect Animations */
+.strobe-active {
+    animation: strobe 0.5s infinite;
+}
+
+@keyframes strobe {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+.fade-active {
+    animation: fade 3s infinite alternate;
+}
+
+@keyframes fade {
+    0% { opacity: 0.3; }
+    100% { opacity: 1; }
+}
+
+.pulse-active {
+    animation: pulse-anim 2s infinite;
+}
+
+@keyframes pulse-anim {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .voice-control-panel {
+        position: static;
+        margin: 15px;
+        min-width: auto;
+    }
+    
+    .voice-toast {
+        left: 20px;
+        right: 20px;
+        min-width: auto;
+    }
+    
+    .control-btn {
+        width: 40px;
+        height: 40px;
+        font-size: 1.1rem;
+    }
+}
