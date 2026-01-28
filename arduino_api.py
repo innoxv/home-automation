@@ -4,10 +4,10 @@ from pydantic import BaseModel, validator
 from typing import Optional
 import serial
 import time
+import threading
 import glob
-import sys
 
-app = FastAPI(title="Smart Bulb Control API - 3 Bulbs with Voice")
+app = FastAPI(title="Smart Bulb Control API - 3 Bulbs")
 
 # CORS
 app.add_middleware(
@@ -21,7 +21,7 @@ app.add_middleware(
 current_state = {
     "bulb1": {"state": "off", "brightness": 0, "pin": 9},
     "bulb2": {"state": "off", "brightness": 0, "pin": 10},
-    "bulb3": {"state": "off", "brightness": 0, "pin": 5},
+    "bulb3": {"state": "off", "brightness": 0, "pin": 11},
     "mode": "manual",
     "strobe_speed": 2,
     "connected": False
@@ -29,6 +29,8 @@ current_state = {
 
 # Serial connection
 arduino = None
+effect_thread = None
+stop_effects = threading.Event()
 
 class BulbCommand(BaseModel):
     bulb: int
@@ -69,34 +71,18 @@ class GroupCommand(BaseModel):
             return int(v)
         except (ValueError, TypeError):
             return None
-        
-class VoiceCommand(BaseModel):
-    command: str
-    bulb: Optional[int] = None
-    action: Optional[str] = None
-    value: Optional[int] = None
-    effect: Optional[str] = None
 
 def get_available_ports():
     """Find all available serial ports"""
     ports = []
     
-    # Platform-specific port detection
-    if sys.platform.startswith('win'):
-        # Windows
-        ports = [f'COM{i}' for i in range(1, 257)]
-    elif sys.platform.startswith('linux'):
-        # Linux
-        patterns = ['/dev/ttyACM*', '/dev/ttyUSB*', '/dev/ttyS*']
-        for pattern in patterns:
-            ports.extend(glob.glob(pattern))
-    elif sys.platform.startswith('darwin'):
-        # Mac OS
-        patterns = ['/dev/tty.usb*', '/dev/tty.usbserial*']
-        for pattern in patterns:
-            ports.extend(glob.glob(pattern))
+    # Linux patterns
+    patterns = ['/dev/ttyACM*', '/dev/ttyUSB*', '/dev/ttyS*', '/dev/ttyAMA*']
     
-    # Remove duplicates and sort
+    for pattern in patterns:
+        ports.extend(glob.glob(pattern))
+    
+    # Filter out duplicates and sort
     ports = list(set(ports))
     ports.sort()
     
@@ -134,80 +120,53 @@ def connect_arduino():
             # Give Arduino time to reset
             time.sleep(2)
             
-            # Clear buffers
+            # Clear any existing data
             arduino.flushInput()
             arduino.flushOutput()
             
-            # Send newline to trigger response
+            # Test 1: Send a newline to trigger response
             arduino.write(b"\n")
             arduino.flush()
-            time.sleep(1)
+            time.sleep(0.5)
             
-            # Read startup messages (Arduino sends multiple lines)
-            all_responses = []
-            start_time = time.time()
-            
-            while time.time() - start_time < 2:
-                if arduino.in_waiting:
-                    line = arduino.readline().decode('utf-8', errors='ignore').strip()
-                    if line:
-                        all_responses.append(line)
-                        print(f"   📨 Line: {line}")
-                else:
-                    time.sleep(0.05)
-            
-            # Check if we got Arduino startup messages
-            arduino_detected = False
-            for response in all_responses:
-                response_upper = response.upper()
-                arduino_indicators = [
-                    'SMART_BULBS', 'VOICE_READY', 'VOICE:READY',
-                    'READY', 'HELLO', 'LIGHT', 'CONTROL',
-                    'OK:', 'PONG', 'VOICE_ACTIVE'
-                ]
+            # Read response
+            if arduino.in_waiting:
+                response = arduino.readline().decode('utf-8', errors='ignore').strip()
+                print(f"   📨 Response to newline: {response}")
                 
-                for indicator in arduino_indicators:
-                    if indicator in response_upper:
-                        print(f"✅✅✅ Arduino identified on {port} (matched '{indicator}')")
-                        current_state["connected"] = True
-                        arduino_detected = True
-                        break
-                
-                if arduino_detected:
-                    break
+                # Check if this looks like an Arduino response
+                if response and any(keyword in response.upper() for keyword in ['SMART_BULBS', 'STATUS:', 'OK:', 'READY', 'ARDUINO', 'PONG']):
+                    print(f"✅✅✅ Arduino identified on {port}")
+                    current_state["connected"] = True
+                    return True
             
-            if arduino_detected:
-                # Get initial status
-                time.sleep(0.1)
-                arduino.write(b"STATUS\n")
-                arduino.flush()
-                return True
-            
-            # Try PING if startup messages didn't work
-            print("   🔄 Trying PING command...")
-            arduino.write(b"PING\n")
+            # Test 2: Send STATUS command
+            arduino.write(b"STATUS\n")
             arduino.flush()
             time.sleep(0.5)
             
             if arduino.in_waiting:
                 response = arduino.readline().decode('utf-8', errors='ignore').strip()
-                print(f"   📨 PING response: {response}")
+                print(f"   📨 STATUS response: {response}")
                 
-                if response and ("PONG" in response.upper() or "VOICE_ACTIVE" in response.upper()):
-                    print(f"✅✅✅ Arduino identified on {port} via PING")
+                if response and ("STATUS:" in response or "OK:" in response):
+                    print(f"✅✅✅ Arduino identified on {port}")
                     current_state["connected"] = True
                     return True
             
-            # Close and try next port
+            # If we get here, close and try next port
             arduino.close()
             arduino = None
             
         except PermissionError:
             print(f"   ❌ Permission denied on {port}")
+            print(f"   💡 Try: sudo chmod 666 {port}")
             continue
+            
         except serial.SerialException as e:
             print(f"   ❌ Serial error on {port}: {e}")
             continue
+            
         except Exception as e:
             print(f"   ❌ Error on {port}: {e}")
             continue
@@ -221,13 +180,15 @@ def get_arduino_connection():
     """Get or create Arduino connection with retry"""
     global arduino
     
+    # If we have a working connection, return it
     if arduino is not None and current_state["connected"]:
         try:
-            # Quick test
+            # Quick test to see if connection is still alive
             arduino.write(b"\n")
             time.sleep(0.1)
             return arduino
         except:
+            # Connection lost
             current_state["connected"] = False
             arduino = None
     
@@ -252,61 +213,32 @@ def send_to_arduino(cmd):
                 return None
             
             print(f"📨 Sending: {cmd}")
-            
-            # Clear input buffer
-            arduino_conn.flushInput()
-            
-            # Send command
             arduino_conn.write(f"{cmd}\n".encode())
             arduino_conn.flush()
             
-            # Wait for response (voice takes time)
-            time.sleep(0.5)
+            # Wait for response
+            time.sleep(0.1)
             
-            # Read response
-            response_lines = []
-            start_time = time.time()
-            timeout = 2.0
-            
-            while time.time() - start_time < timeout:
-                if arduino_conn.in_waiting:
-                    line = arduino_conn.readline().decode('utf-8', errors='ignore').strip()
-                    if line:
-                        print(f"📨 Raw line: {line}")
-                        
-                        # Skip "CMD: ..." lines
-                        if line.startswith("CMD:"):
-                            continue
-                        
-                        response_lines.append(line)
-                        
-                        # Stop if we got a response marker
-                        if any(line.startswith(prefix) for prefix in ["OK:", "ERROR:", "STATUS:", "EFFECT:", "PONG", "STROBE_SPEED:"]):
-                            break
-                else:
-                    time.sleep(0.01)
-            
-            if response_lines:
-                response = " | ".join(response_lines)
-                print(f"📨 Final response: {response}")
+            # Try to read response
+            if arduino_conn.in_waiting:
+                response = arduino_conn.readline().decode('utf-8', errors='ignore').strip()
+                print(f"📨 Response: {response}")
                 
-                # Update state
+                # Update state if STATUS command
                 if cmd.upper() == "STATUS":
                     parse_status(response)
-                elif cmd.upper() in ["B1 ON", "B1 OFF", "B2 ON", "B2 OFF", "B3 ON", "B3 OFF", "ALL ON", "ALL OFF"]:
-                    update_state_from_command(cmd.upper())
-                elif cmd.upper().startswith("STROBE SPEED"):
-                    # Update strobe speed
-                    try:
-                        parts = response.split(":")
-                        if len(parts) > 1:
-                            current_state["strobe_speed"] = int(parts[1])
-                    except:
-                        pass
                 
                 return response
             else:
-                print(f"📨 No response for: {cmd}")
+                # No response, but command might have succeeded
+                print(f"📨 No response received for: {cmd}")
+                
+                # For simple commands, assume success
+                simple_commands = ["B1 ON", "B1 OFF", "B2 ON", "B2 OFF", "B3 ON", "B3 OFF", 
+                                 "ALL ON", "ALL OFF", "BOTH ON", "BOTH OFF"]
+                if cmd.upper() in simple_commands:
+                    return f"OK:{cmd}"
+                
                 return None
                 
         except Exception as e:
@@ -321,63 +253,29 @@ def send_to_arduino(cmd):
     
     return None
 
-def update_state_from_command(cmd):
-    """Update local state based on command"""
-    cmd = cmd.upper()
-    
-    if cmd == "B1 ON":
-        current_state["bulb1"]["state"] = "on"
-        current_state["bulb1"]["brightness"] = 100
-    elif cmd == "B1 OFF":
-        current_state["bulb1"]["state"] = "off"
-        current_state["bulb1"]["brightness"] = 0
-    elif cmd == "B2 ON":
-        current_state["bulb2"]["state"] = "on"
-        current_state["bulb2"]["brightness"] = 100
-    elif cmd == "B2 OFF":
-        current_state["bulb2"]["state"] = "off"
-        current_state["bulb2"]["brightness"] = 0
-    elif cmd == "B3 ON":
-        current_state["bulb3"]["state"] = "on"
-        current_state["bulb3"]["brightness"] = 100
-    elif cmd == "B3 OFF":
-        current_state["bulb3"]["state"] = "off"
-        current_state["bulb3"]["brightness"] = 0
-    elif cmd == "ALL ON":
-        for i in range(1, 4):
-            current_state[f"bulb{i}"]["state"] = "on"
-            current_state[f"bulb{i}"]["brightness"] = 100
-    elif cmd == "ALL OFF":
-        for i in range(1, 4):
-            current_state[f"bulb{i}"]["state"] = "off"
-            current_state[f"bulb{i}"]["brightness"] = 0
-
 def parse_status(response):
-    """Parse Arduino status response"""
+    """Parse Arduino status response for 3 bulbs"""
     if response and ("STATUS:" in response):
         try:
-            for line in response.split(" | "):
-                if "STATUS:" in line:
-                    parts = line.split(":")
-                    if len(parts) >= 9:
-                        # Bulb 1
-                        b1_val = int(parts[2])
-                        current_state["bulb1"]["brightness"] = int(b1_val / 2.55)
-                        current_state["bulb1"]["state"] = "on" if b1_val > 0 else "off"
-                        
-                        # Bulb 2
-                        b2_val = int(parts[4])
-                        current_state["bulb2"]["brightness"] = int(b2_val / 2.55)
-                        current_state["bulb2"]["state"] = "on" if b2_val > 0 else "off"
-                        
-                        # Bulb 3
-                        b3_val = int(parts[6])
-                        current_state["bulb3"]["brightness"] = int(b3_val / 2.55)
-                        current_state["bulb3"]["state"] = "on" if b3_val > 0 else "off"
-                        
-                        # Mode
-                        current_state["mode"] = parts[8].lower() if len(parts) > 8 else "manual"
-                    break
+            parts = response.split(":")
+            if len(parts) >= 9:  # STATUS:B1:0:B2:0:B3:0:MODE:MANUAL
+                # Bulb 1
+                b1_val = int(parts[2])
+                current_state["bulb1"]["brightness"] = int(b1_val / 2.55)
+                current_state["bulb1"]["state"] = "on" if b1_val > 0 else "off"
+                
+                # Bulb 2
+                b2_val = int(parts[4])
+                current_state["bulb2"]["brightness"] = int(b2_val / 2.55)
+                current_state["bulb2"]["state"] = "on" if b2_val > 0 else "off"
+                
+                # Bulb 3
+                b3_val = int(parts[6])
+                current_state["bulb3"]["brightness"] = int(b3_val / 2.55)
+                current_state["bulb3"]["state"] = "on" if b3_val > 0 else "off"
+                
+                # Mode
+                current_state["mode"] = parts[8].lower() if len(parts) > 8 else "manual"
         except Exception as e:
             print(f"⚠️ Error parsing status: {e}")
 
@@ -386,20 +284,16 @@ def parse_status(response):
 @app.get("/")
 def root():
     return {
-        "service": "Smart Bulb Control with Voice",
-        "version": "6.0",
+        "service": "Smart Bulb Control",
+        "version": "4.0",
         "bulbs": 3,
-        "pins": {"bulb1": 9, "bulb2": 10, "bulb3": 5},
-        "voice_feedback": True,
-        "effects": ["strobe"],
+        "pins": {"bulb1": 9, "bulb2": 10, "bulb3": 11},
         "endpoints": {
             "bulb_control": "POST /api/bulb",
             "effect": "POST /api/effect",
             "group": "POST /api/group",
             "status": "GET /api/status",
-            "command": "POST /api/command",
-            "voice": "POST /api/voice",
-            "test": "GET /api/test"
+            "command": "POST /api/command"
         },
         "arduino_connected": current_state["connected"]
     }
@@ -428,6 +322,12 @@ def send_command(cmd: str):
 @app.post("/api/bulb")
 def control_bulb(command: BulbCommand):
     """Control individual bulb (1, 2, or 3)"""
+    # Stop any running effects first
+    if effect_thread and effect_thread.is_alive():
+        stop_effects.set()
+        effect_thread.join(timeout=1)
+        stop_effects.clear()
+    
     if command.bulb not in [1, 2, 3]:
         raise HTTPException(status_code=400, detail="Bulb must be 1, 2, or 3")
     
@@ -436,18 +336,25 @@ def control_bulb(command: BulbCommand):
     
     if command.action == "on":
         response = send_to_arduino(f"B{command.bulb} ON")
+        current_state[bulb_key]["state"] = "on"
+        current_state[bulb_key]["brightness"] = 100
         current_state["mode"] = "manual"
         
     elif command.action == "off":
         response = send_to_arduino(f"B{command.bulb} OFF")
+        current_state[bulb_key]["state"] = "off"
+        current_state[bulb_key]["brightness"] = 0
         current_state["mode"] = "manual"
         
     elif command.action == "brightness":
         if command.value is None or not 0 <= command.value <= 100:
             raise HTTPException(status_code=400, detail="Brightness must be 0-100")
         
+        # Convert to PWM (0-255)
         pwm_value = int(command.value * 2.55)
         response = send_to_arduino(f"B{command.bulb} {pwm_value}")
+        current_state[bulb_key]["brightness"] = command.value
+        current_state[bulb_key]["state"] = "on" if command.value > 0 else "off"
         current_state["mode"] = "manual"
     
     else:
@@ -466,27 +373,78 @@ def control_bulb(command: BulbCommand):
 @app.post("/api/effect")
 def control_effect(command: EffectCommand):
     """Start/stop effects"""
-    response = None
+    global effect_thread
     
-    # Only strobe is supported
+    # Stop any running effects
+    if effect_thread and effect_thread.is_alive():
+        stop_effects.set()
+        effect_thread.join(timeout=1)
+        effect_thread = None
+    
+    stop_effects.clear()
+    current_state["mode"] = command.effect
+    
     if command.effect == "strobe":
-        if command.speed:
-            cmd = f"STROBE SPEED {command.speed}"
-            current_state["strobe_speed"] = command.speed
-        else:
-            cmd = "START STROBE"
-        response = send_to_arduino(cmd)
-        current_state["mode"] = "strobe"
+        # Start strobe effect thread
+        effect_thread = threading.Thread(
+            target=strobe_effect, 
+            args=(command.speed or 2,),
+            daemon=True
+        )
+        effect_thread.start()
+        response = "Strobe effect started"
+        
+    elif command.effect == "fade":
+        # Start fade effect thread
+        effect_thread = threading.Thread(
+            target=fade_effect,
+            daemon=True
+        )
+        effect_thread.start()
+        response = "Fade effect started"
+        
+    elif command.effect == "pulse":
+        # Start pulse effect thread
+        effect_thread = threading.Thread(
+            target=pulse_effect,
+            daemon=True
+        )
+        effect_thread.start()
+        response = "Pulse effect started"
+        
+    elif command.effect == "alternate":
+        # Start alternate effect thread
+        effect_thread = threading.Thread(
+            target=alternate_effect,
+            daemon=True
+        )
+        effect_thread.start()
+        response = "Alternate effect started"
+        
+    elif command.effect == "rainbow":
+        # Start rainbow effect thread
+        effect_thread = threading.Thread(
+            target=rainbow_effect,
+            daemon=True
+        )
+        effect_thread.start()
+        response = "Rainbow effect started"
         
     elif command.effect == "stop":
-        response = send_to_arduino("STOP")
+        # Send stop command to Arduino
+        response = send_to_arduino("ALL OFF")
         current_state["mode"] = "manual"
+        for i in range(1, 4):
+            current_state[f"bulb{i}"]["state"] = "off"
+            current_state[f"bulb{i}"]["brightness"] = 0
+        stop_effects.set()
+        response = "All effects stopped"
         
     else:
-        raise HTTPException(status_code=400, detail="Only 'strobe' and 'stop' effects are supported")
+        raise HTTPException(status_code=400, detail="Invalid effect")
     
     return {
-        "success": True if response else False,
+        "success": True,
         "effect": command.effect,
         "speed": command.speed,
         "response": response,
@@ -497,32 +455,45 @@ def control_effect(command: EffectCommand):
 @app.post("/api/group")
 def group_control(command: GroupCommand):
     """Control all bulbs together"""
+    # Stop any running effects
+    if effect_thread and effect_thread.is_alive():
+        stop_effects.set()
+        effect_thread.join(timeout=1)
+        stop_effects.clear()
+    
     response = None
     
     if command.action == "on":
         response = send_to_arduino("ALL ON")
-        current_state["mode"] = "manual"
+        for i in range(1, 4):
+            current_state[f"bulb{i}"]["state"] = "on"
+            current_state[f"bulb{i}"]["brightness"] = 100
         
     elif command.action == "off":
         response = send_to_arduino("ALL OFF")
-        current_state["mode"] = "manual"
+        for i in range(1, 4):
+            current_state[f"bulb{i}"]["state"] = "off"
+            current_state[f"bulb{i}"]["brightness"] = 0
         
     elif command.action == "brightness":
         if command.brightness is None or not 0 <= command.brightness <= 100:
             raise HTTPException(status_code=400, detail="Brightness must be 0-100")
         
         pwm_value = int(command.brightness * 2.55)
-        responses = []
+        # Set all bulbs to same brightness
         for i in range(1, 4):
-            resp = send_to_arduino(f"B{i} {pwm_value}")
-            if resp:
-                responses.append(resp)
+            send_to_arduino(f"B{i} {pwm_value}")
         
-        response = " | ".join(responses) if responses else f"All bulbs set to {command.brightness}%"
-        current_state["mode"] = "manual"
+        for i in range(1, 4):
+            current_state[f"bulb{i}"]["brightness"] = command.brightness
+            current_state[f"bulb{i}"]["state"] = "on" if command.brightness > 0 else "off"
+        
+        response = f"All bulbs set to {command.brightness}%"
     
     else:
         raise HTTPException(status_code=400, detail="Action must be 'on', 'off', or 'brightness'")
+    
+    current_state["mode"] = "manual"
     
     return {
         "success": True if response else False,
@@ -557,101 +528,135 @@ def get_status():
             "timestamp": time.time()
         }
 
-@app.post("/api/voice")
-def voice_command(command: VoiceCommand):
-    """Handle voice commands"""
-    try:
-        response = None
-        
-        if command.command == "turn_on":
-            if command.bulb:
-                response = send_to_arduino(f"B{command.bulb} ON")
-            else:
-                response = send_to_arduino("ALL ON")
-            
-        elif command.command == "turn_off":
-            if command.bulb:
-                response = send_to_arduino(f"B{command.bulb} OFF")
-            else:
-                response = send_to_arduino("ALL OFF")
-            
-        elif command.command == "set_brightness":
-            if command.value is not None and 0 <= command.value <= 100:
-                pwm_value = int(command.value * 2.55)
-                if command.bulb:
-                    response = send_to_arduino(f"B{command.bulb} {pwm_value}")
-                else:
-                    responses = []
-                    for i in range(1, 4):
-                        resp = send_to_arduino(f"B{i} {pwm_value}")
-                        if resp:
-                            responses.append(resp)
-                    response = " | ".join(responses) if responses else f"All bulbs set to {command.value}%"
-                current_state["mode"] = "manual"
-            else:
-                raise HTTPException(status_code=400, detail="Brightness must be 0-100")
-                
-        elif command.command == "start_effect" and command.effect:
-            if command.effect.lower() == "strobe":
-                response = send_to_arduino("START STROBE")
-                current_state["mode"] = "strobe"
-            else:
-                raise HTTPException(status_code=400, detail="Only 'strobe' effect is supported")
-                
-        elif command.command == "stop_effects":
-            response = send_to_arduino("STOP")
-            current_state["mode"] = "manual"
-        
-        else:
-            raise HTTPException(status_code=400, detail="Unknown voice command")
-        
-        return {
-            "success": True if response else False,
-            "command": command.command,
-            "response": response,
-            "state": current_state,
-            "connected": current_state["connected"]
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# ========== EFFECT FUNCTIONS (Updated for 3 bulbs) ==========
 
-@app.get("/api/test")
-def test_connection():
-    """Test Arduino connection"""
-    response = send_to_arduino("PING")
+def strobe_effect(speed: int = 2):
+    """Continuous strobe effect for 3 bulbs"""
+    speed_map = {1: 0.5, 2: 0.25, 3: 0.1, 4: 0.05, 5: 0.025}
+    delay = speed_map.get(speed, 0.25)
     
-    if response:
-        return {
-            "success": True,
-            "message": "Arduino is connected and responding",
-            "response": response,
-            "connected": True
-        }
-    else:
-        return {
-            "success": False,
-            "message": "Arduino not responding",
-            "connected": False
-        }
+    while not stop_effects.is_set():
+        send_to_arduino("ALL ON")
+        time.sleep(delay)
+        if stop_effects.is_set():
+            break
+        send_to_arduino("ALL OFF")
+        time.sleep(delay)
+
+def fade_effect():
+    """Continuous fade effect for 3 bulbs"""
+    step = 5
+    delay = 0.05
+    
+    while not stop_effects.is_set():
+        # Pattern 1: Sequential fade
+        for i in range(0, 256, step):
+            if stop_effects.is_set():
+                break
+            send_to_arduino(f"B1 {i}")
+            send_to_arduino(f"B2 {255 - i}")
+            send_to_arduino(f"B3 {(i + 128) % 255}")
+            time.sleep(delay)
+        
+        # Pattern 2: Reverse
+        for i in range(0, 256, step):
+            if stop_effects.is_set():
+                break
+            send_to_arduino(f"B1 {255 - i}")
+            send_to_arduino(f"B2 {i}")
+            send_to_arduino(f"B3 {255 - ((i + 128) % 255)}")
+            time.sleep(delay)
+
+def pulse_effect():
+    """Continuous pulse/breathe effect for 3 bulbs"""
+    step = 3
+    delay = 0.03
+    
+    while not stop_effects.is_set():
+        # Fade in
+        for i in range(0, 256, step):
+            if stop_effects.is_set():
+                break
+            send_to_arduino(f"B1 {i}")
+            send_to_arduino(f"B2 {i}")
+            send_to_arduino(f"B3 {i}")
+            time.sleep(delay)
+        
+        # Fade out
+        for i in range(255, -1, -step):
+            if stop_effects.is_set():
+                break
+            send_to_arduino(f"B1 {i}")
+            send_to_arduino(f"B2 {i}")
+            send_to_arduino(f"B3 {i}")
+            time.sleep(delay)
+
+def alternate_effect():
+    """Continuous alternate blinking effect for 3 bulbs"""
+    delay = 0.3
+    
+    while not stop_effects.is_set():
+        # Pattern 1: 1 on, others off
+        send_to_arduino("B1 ON")
+        send_to_arduino("B2 OFF")
+        send_to_arduino("B3 OFF")
+        time.sleep(delay)
+        
+        if stop_effects.is_set():
+            break
+        
+        # Pattern 2: 2 on, others off
+        send_to_arduino("B1 OFF")
+        send_to_arduino("B2 ON")
+        send_to_arduino("B3 OFF")
+        time.sleep(delay)
+        
+        if stop_effects.is_set():
+            break
+        
+        # Pattern 3: 3 on, others off
+        send_to_arduino("B1 OFF")
+        send_to_arduino("B2 OFF")
+        send_to_arduino("B3 ON")
+        time.sleep(delay)
+
+def rainbow_effect():
+    """Continuous rainbow color cycle effect for 3 bulbs"""
+    colors = [
+        (255, 0, 0),    # Red
+        (255, 127, 0),  # Orange
+        (255, 255, 0),  # Yellow
+        (0, 255, 0),    # Green
+        (0, 0, 255),    # Blue
+        (75, 0, 130),   # Indigo
+        (148, 0, 211)   # Violet
+    ]
+    
+    while not stop_effects.is_set():
+        for r, g, b in colors:
+            if stop_effects.is_set():
+                break
+            
+            # Distribute RGB across 3 bulbs
+            send_to_arduino(f"B1 {r}")
+            send_to_arduino(f"B2 {g}")
+            send_to_arduino(f"B3 {b}")
+            time.sleep(0.5)
 
 if __name__ == "__main__":
     import uvicorn
-    
-    print("=" * 60)
-    print("🚀 Smart Bulb Control API v6.0")
-    print("📌 Bulb 3 on pin 5 | Speaker on pin 3")
-    print("📌 Voice feedback enabled")
-    print("=" * 60)
+    print("🚀 Starting Smart Bulb Control API v4.0 (3 Bulbs)...")
+    print("=" * 50)
     
     # Try to connect to Arduino
-    if connect_arduino():
-        print("✅ Arduino connected with voice support!")
-    else:
-        print("⚠️  Arduino not connected - check connection")
+    connect_arduino()
     
-    print(f"🌐 API: http://localhost:5000")
-    print(f"📖 Docs: http://localhost:5000/docs")
-    print("=" * 60)
+    if current_state["connected"]:
+        print("✅ System ready - Arduino connected!")
+    else:
+        print("⚠️  Arduino not connected - basic functions available")
+    
+    print("🌐 API available at: http://localhost:5000")
+    print("=" * 50)
     
     uvicorn.run(app, host="0.0.0.0", port=5000, log_level="info")
